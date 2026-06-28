@@ -34,10 +34,10 @@ export default function App() {
   const [errorMap, setErrorMap] = useState<IsochroneErrorMap>({})
   const [digitransitKey, setDigitransitKey] = useState<string>('')
 
-  // Load digitransit key from localStorage
+  // Load digitransit key from localStorage; fall back to the bundled key
   useEffect(() => {
     const saved = localStorage.getItem('digitransit_key')
-    if (saved) setDigitransitKey(saved)
+    setDigitransitKey(saved || 'eb6662774de44edb82ceaa643a50d79f')
   }, [])
 
   const saveDigitransitKey = useCallback((key: string) => {
