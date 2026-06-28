@@ -1,7 +1,8 @@
 import { useMemo, useEffect } from 'react'
-import { MapContainer, TileLayer, GeoJSON, CircleMarker, Tooltip, useMap } from 'react-leaflet'
-import type { PathOptions } from 'leaflet'
-import type { Feature } from 'geojson'
+import { MapContainer, TileLayer, GeoJSON, CircleMarker, Tooltip, Marker, useMap } from 'react-leaflet'
+import L from 'leaflet'
+import * as turf from '@turf/turf'
+import type { Feature, Polygon, MultiPolygon } from 'geojson'
 import type {
   Address,
   TransportWeights,
@@ -15,7 +16,6 @@ import { TIME_THRESHOLDS, COMBINED_COLORS } from '../types'
 import { computeCombinedIsochrones } from '../utils/geo'
 
 const HELSINKI_CENTER: [number, number] = [60.1699, 24.9384]
-
 const MODE_ORDER: TransportMode[] = ['transit', 'car', 'cycling', 'walking']
 
 function getContourTime(feature: Feature): number {
@@ -23,32 +23,67 @@ function getContourTime(feature: Feature): number {
 }
 
 function getIndividualOpacity(timeMinutes: number, weight: number): number {
-  // Inner rings stacked → cumulative opacity creates heatmap naturally
-  // Base opacity per layer; higher weights make them more visible
   const baseOpacity = weight / 100
   const timeScale = timeMinutes === 15 ? 1 : timeMinutes === 30 ? 0.85 : timeMinutes === 45 ? 0.7 : 0.55
-  return baseOpacity * timeScale * 0.22
+  // Reduced from 0.22 → 0.12 for more transparency
+  return baseOpacity * timeScale * 0.12
 }
 
-// Flyto Helsinki when first address is added
 function MapController({ addresses }: { addresses: Address[] }) {
   const map = useMap()
   const firstAddr = addresses[0]
-
   useEffect(() => {
-    if (firstAddr) {
-      map.flyTo([firstAddr.lat, firstAddr.lng], 12, { duration: 1.2 })
-    }
+    if (firstAddr) map.flyTo([firstAddr.lat, firstAddr.lng], 12, { duration: 1.2 })
   }, [firstAddr, map])
-
   return null
+}
+
+// Creates a styled pill-shaped DivIcon for time labels
+function timeLabelIcon(text: string, color: string): L.DivIcon {
+  return L.divIcon({
+    html: `<div style="
+      background:${color};
+      color:white;
+      padding:3px 10px;
+      border-radius:20px;
+      font-size:12px;
+      font-weight:700;
+      white-space:nowrap;
+      box-shadow:0 1px 6px rgba(0,0,0,0.4);
+      border:1.5px solid rgba(255,255,255,0.4);
+      pointer-events:none;
+      user-select:none;
+    ">${text}</div>`,
+    className: '',
+    iconAnchor: undefined,
+    iconSize: undefined,
+  })
+}
+
+// Safely get the centroid of a ring (outer polygon minus inner polygon)
+function getRingCentroid(
+  outer: Feature<Polygon | MultiPolygon> | null | undefined,
+  inner: Feature<Polygon | MultiPolygon> | null | undefined,
+): [number, number] | null {
+  if (!outer) return null
+  try {
+    let target: Feature = outer
+    if (inner) {
+      const ring = turf.difference(outer, inner)
+      if (ring) target = ring
+    }
+    const c = turf.centroid(target)
+    const [lng, lat] = c.geometry.coordinates
+    return [lat, lng]
+  } catch {
+    return null
+  }
 }
 
 interface IndividualLayersProps {
   addresses: Address[]
   isochroneData: IsochroneDataMap
   weights: TransportWeights
-  loadingMap: IsochroneLoadingMap
 }
 
 function IndividualLayers({ addresses, isochroneData, weights }: IndividualLayersProps) {
@@ -64,7 +99,6 @@ function IndividualLayers({ addresses, isochroneData, weights }: IndividualLayer
           const fc = addrData[mode]
           if (!fc || fc.features.length === 0) return []
 
-          // Sort descending by time so large rings render first (below small rings)
           const sorted = [...fc.features].sort(
             (a, b) => getContourTime(b) - getContourTime(a),
           )
@@ -72,21 +106,19 @@ function IndividualLayers({ addresses, isochroneData, weights }: IndividualLayer
           return sorted.map((feature) => {
             const t = getContourTime(feature)
             const opacity = getIndividualOpacity(t, weight)
-            if (opacity < 0.01) return null
-
-            const styleOptions: PathOptions = {
-              fillColor: address.color,
-              fillOpacity: opacity,
-              color: address.color,
-              weight: t === 15 ? 1.5 : 0.5,
-              opacity: t === 15 ? 0.6 : 0.25,
-            }
+            if (opacity < 0.005) return null
 
             return (
               <GeoJSON
                 key={`${address.id}-${mode}-${t}`}
                 data={feature}
-                style={() => styleOptions}
+                style={() => ({
+                  fillColor: address.color,
+                  fillOpacity: opacity,
+                  color: address.color,
+                  weight: t === 15 ? 1.5 : 0.5,
+                  opacity: t === 15 ? 0.5 : 0.2,
+                })}
               />
             )
           })
@@ -108,7 +140,25 @@ function CombinedLayer({ addresses, isochroneData, weights }: CombinedLayerProps
     [addresses, isochroneData, weights],
   )
 
-  // Render from outermost (60 min, red) to innermost (15 min, green)
+  // Compute centroid labels for each time ring (annular band between thresholds)
+  const labels = useMemo(() => {
+    const sortedTs: TimeThreshold[] = [60, 45, 30, 15]
+    return sortedTs
+      .map((T, idx) => {
+        const outer = combined[T] as Feature<Polygon | MultiPolygon> | null | undefined
+        const innerT = sortedTs[idx + 1] as TimeThreshold | undefined
+        const inner = innerT
+          ? (combined[innerT] as Feature<Polygon | MultiPolygon> | null | undefined)
+          : undefined
+
+        const pos = getRingCentroid(outer, inner)
+        if (!pos) return null
+        return { pos, T, color: COMBINED_COLORS[T] }
+      })
+      .filter((x): x is { pos: [number, number]; T: TimeThreshold; color: string } => x !== null)
+  }, [combined])
+
+  // Render largest polygon first so smaller ones sit on top
   const sortedThresholds = [...TIME_THRESHOLDS].sort((a, b) => b - a) as TimeThreshold[]
 
   return (
@@ -116,7 +166,6 @@ function CombinedLayer({ addresses, isochroneData, weights }: CombinedLayerProps
       {sortedThresholds.map((T) => {
         const feature = combined[T]
         if (!feature) return null
-
         const color = COMBINED_COLORS[T]
         return (
           <GeoJSON
@@ -124,14 +173,23 @@ function CombinedLayer({ addresses, isochroneData, weights }: CombinedLayerProps
             data={feature}
             style={() => ({
               fillColor: color,
-              fillOpacity: 0.55,
+              fillOpacity: 0.28,   // reduced from 0.55
               color: color,
               weight: 1.5,
-              opacity: 0.8,
+              opacity: 0.7,
             })}
           />
         )
       })}
+
+      {/* Time ring labels */}
+      {labels.map(({ pos, T, color }) => (
+        <Marker
+          key={`label-${T}`}
+          position={pos}
+          icon={timeLabelIcon(`≤${T} min`, color)}
+        />
+      ))}
     </>
   )
 }
@@ -171,13 +229,11 @@ export default function MapView({
 
         <MapController addresses={addresses} />
 
-        {/* Isochrone layers */}
         {viewMode === 'individual' && (
           <IndividualLayers
             addresses={addresses}
             isochroneData={isochroneData}
             weights={weights}
-            loadingMap={loadingMap}
           />
         )}
 
@@ -209,7 +265,7 @@ export default function MapView({
         ))}
       </MapContainer>
 
-      {/* Loading overlay */}
+      {/* Loading indicator */}
       {isLoading && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-sm shadow-lg rounded-full px-4 py-2 flex items-center gap-2 z-[1000] text-sm text-gray-600 pointer-events-none">
           <span className="animate-spin">⟳</span>
@@ -217,42 +273,36 @@ export default function MapView({
         </div>
       )}
 
-      {/* Combined view legend */}
+      {/* Combined legend */}
       {viewMode === 'combined' && addresses.length >= 2 && (
         <div className="absolute bottom-8 right-4 bg-white/95 backdrop-blur-sm shadow-lg rounded-xl p-3 z-[1000] text-xs space-y-1.5">
           <p className="font-semibold text-gray-700 mb-2">Travel time to all locations</p>
-          {[
-            { t: 15, label: '≤ 15 min', color: COMBINED_COLORS[15] },
-            { t: 30, label: '≤ 30 min', color: COMBINED_COLORS[30] },
-            { t: 45, label: '≤ 45 min', color: COMBINED_COLORS[45] },
-            { t: 60, label: '≤ 60 min', color: COMBINED_COLORS[60] },
-          ].map(({ label, color }) => (
+          {([
+            { t: 15, label: '≤ 15 min' },
+            { t: 30, label: '≤ 30 min' },
+            { t: 45, label: '≤ 45 min' },
+            { t: 60, label: '≤ 60 min' },
+          ] as { t: TimeThreshold; label: string }[]).map(({ t, label }) => (
             <div key={label} className="flex items-center gap-2">
-              <div className="w-4 h-3 rounded" style={{ backgroundColor: color, opacity: 0.8 }} />
+              <div className="w-4 h-3 rounded" style={{ backgroundColor: COMBINED_COLORS[t], opacity: 0.75 }} />
               <span className="text-gray-600">{label}</span>
             </div>
           ))}
-          <p className="text-gray-400 pt-1 border-t border-gray-100">
-            Best transport mode used
-          </p>
+          <p className="text-gray-400 pt-1 border-t border-gray-100">Best transport mode used</p>
         </div>
       )}
 
-      {/* Individual mode legend */}
+      {/* Individual legend */}
       {viewMode === 'individual' && addresses.length > 0 && (
         <div className="absolute bottom-8 right-4 bg-white/95 backdrop-blur-sm shadow-lg rounded-xl p-3 z-[1000] text-xs space-y-1.5">
           <p className="font-semibold text-gray-700 mb-2">Locations</p>
           {addresses.map((a) => (
             <div key={a.id} className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ backgroundColor: a.color }} />
-              <span className="text-gray-600 truncate max-w-32">
-                {a.label.split(',')[0]}
-              </span>
+              <span className="text-gray-600 truncate max-w-32">{a.label.split(',')[0]}</span>
             </div>
           ))}
-          <p className="text-gray-400 pt-1 border-t border-gray-100">
-            Darker = closer (15 min)
-          </p>
+          <p className="text-gray-400 pt-1 border-t border-gray-100">Darker = closer (15 min)</p>
         </div>
       )}
 
@@ -261,9 +311,7 @@ export default function MapView({
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl p-6 text-center max-w-xs">
             <div className="text-4xl mb-3">📍</div>
-            <h2 className="text-base font-semibold text-gray-800 mb-1">
-              Add your locations
-            </h2>
+            <h2 className="text-base font-semibold text-gray-800 mb-1">Add your locations</h2>
             <p className="text-sm text-gray-500">
               Search for work, school, or any address to see where in Helsinki you should live.
             </p>

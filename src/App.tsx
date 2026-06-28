@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type {
   Address,
   TransportWeights,
@@ -17,28 +17,55 @@ import MapView from './components/MapView'
 const DEFAULT_WEIGHTS: TransportWeights = {
   walking: 40,
   cycling: 70,
-  car: 50,
+  car: 0,
   transit: 80,
 }
+
+// Read key synchronously so it's available on the very first render
+function getInitialKey(): string {
+  return localStorage.getItem('digitransit_key') || 'eb6662774de44edb82ceaa643a50d79f'
+}
+
+// Pre-seeded with the three addresses from the screenshot
+const SEED_ADDRESSES: Address[] = [
+  {
+    id: 'seed-0',
+    label: 'Pakilantie 122',
+    inputText: 'pakilantie 122',
+    lat: 60.2534,
+    lng: 24.9513,
+    color: getAddressColor(0),
+  },
+  {
+    id: 'seed-1',
+    label: 'Ståhlberginkuja 1',
+    inputText: 'Ståhlberginkuja 1',
+    lat: 60.1917,
+    lng: 25.0340,
+    color: getAddressColor(1),
+  },
+  {
+    id: 'seed-2',
+    label: 'Tulistimenkatu 2',
+    inputText: 'Tulistimenkatu 2',
+    lat: 60.2066,
+    lng: 24.9329,
+    color: getAddressColor(2),
+  },
+]
 
 function generateId() {
   return Math.random().toString(36).slice(2, 9)
 }
 
 export default function App() {
-  const [addresses, setAddresses] = useState<Address[]>([])
+  const [addresses, setAddresses] = useState<Address[]>(SEED_ADDRESSES)
   const [weights, setWeights] = useState<TransportWeights>(DEFAULT_WEIGHTS)
-  const [viewMode, setViewMode] = useState<ViewMode>('individual')
+  const [viewMode, setViewMode] = useState<ViewMode>('combined')
   const [isochroneData, setIsochroneData] = useState<IsochroneDataMap>({})
   const [loadingMap, setLoadingMap] = useState<IsochroneLoadingMap>({})
   const [errorMap, setErrorMap] = useState<IsochroneErrorMap>({})
-  const [digitransitKey, setDigitransitKey] = useState<string>('')
-
-  // Load digitransit key from localStorage; fall back to the bundled key
-  useEffect(() => {
-    const saved = localStorage.getItem('digitransit_key')
-    setDigitransitKey(saved || 'eb6662774de44edb82ceaa643a50d79f')
-  }, [])
+  const [digitransitKey, setDigitransitKey] = useState<string>(getInitialKey)
 
   const saveDigitransitKey = useCallback((key: string) => {
     setDigitransitKey(key)
@@ -49,15 +76,11 @@ export default function App() {
     async (address: Address) => {
       const modes: TransportMode[] = ['walking', 'cycling', 'car', 'transit']
 
-      // Set loading state for all modes
       setLoadingMap((prev) => ({
         ...prev,
         [address.id]: Object.fromEntries(modes.map((m) => [m, true])),
       }))
-      setErrorMap((prev) => ({
-        ...prev,
-        [address.id]: {},
-      }))
+      setErrorMap((prev) => ({ ...prev, [address.id]: {} }))
 
       const results: Partial<Record<TransportMode, unknown>> = {}
       const errors: Partial<Record<TransportMode, string>> = {}
@@ -70,23 +93,20 @@ export default function App() {
                 errors[mode] = 'No Digitransit API key — add one in Settings'
                 results[mode] = null
               } else {
-                const data = await fetchDigitransitIsochrone(
+                results[mode] = await fetchDigitransitIsochrone(
                   address.lat,
                   address.lng,
                   digitransitKey,
                 )
-                results[mode] = data
               }
             } else {
-              const data = await fetchValhallaIsochrone(address.lat, address.lng, mode)
-              results[mode] = data
+              results[mode] = await fetchValhallaIsochrone(address.lat, address.lng, mode)
             }
           } catch (err) {
             errors[mode] = err instanceof Error ? err.message : 'Failed to load'
             results[mode] = null
           }
 
-          // Clear loading for this mode
           setLoadingMap((prev) => ({
             ...prev,
             [address.id]: { ...prev[address.id], [mode]: false },
@@ -109,6 +129,14 @@ export default function App() {
     [digitransitKey],
   )
 
+  // Fetch isochrones for seed addresses exactly once on mount
+  const seedFetched = useRef(false)
+  useEffect(() => {
+    if (seedFetched.current) return
+    seedFetched.current = true
+    SEED_ADDRESSES.forEach((addr) => fetchIsochronesForAddress(addr))
+  }, [fetchIsochronesForAddress])
+
   const addAddress = useCallback(
     (inputText: string, displayName: string, lat: number, lng: number) => {
       const id = generateId()
@@ -126,27 +154,13 @@ export default function App() {
 
   const removeAddress = useCallback((id: string) => {
     setAddresses((prev) => prev.filter((a) => a.id !== id))
-    setIsochroneData((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setLoadingMap((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setErrorMap((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
+    setIsochroneData((prev) => { const n = { ...prev }; delete n[id]; return n })
+    setLoadingMap((prev) => { const n = { ...prev }; delete n[id]; return n })
+    setErrorMap((prev) => { const n = { ...prev }; delete n[id]; return n })
   }, [])
 
   const retryAddress = useCallback(
-    (address: Address) => {
-      fetchIsochronesForAddress(address)
-    },
+    (address: Address) => fetchIsochronesForAddress(address),
     [fetchIsochronesForAddress],
   )
 
