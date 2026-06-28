@@ -25,8 +25,7 @@ function getContourTime(feature: Feature): number {
 function getIndividualOpacity(timeMinutes: number, weight: number): number {
   const baseOpacity = weight / 100
   const timeScale = timeMinutes === 15 ? 1 : timeMinutes === 30 ? 0.85 : timeMinutes === 45 ? 0.7 : 0.55
-  // Reduced from 0.22 → 0.12 for more transparency
-  return baseOpacity * timeScale * 0.12
+  return baseOpacity * timeScale * 0.06
 }
 
 function MapController({ addresses }: { addresses: Address[] }) {
@@ -38,25 +37,27 @@ function MapController({ addresses }: { addresses: Address[] }) {
   return null
 }
 
-// Creates a styled pill-shaped DivIcon for time labels
+// Creates a centered pill-shaped DivIcon for time labels
 function timeLabelIcon(text: string, color: string): L.DivIcon {
   return L.divIcon({
     html: `<div style="
       background:${color};
       color:white;
-      padding:3px 10px;
+      padding:4px 12px;
       border-radius:20px;
-      font-size:12px;
-      font-weight:700;
+      font-size:13px;
+      font-weight:800;
       white-space:nowrap;
-      box-shadow:0 1px 6px rgba(0,0,0,0.4);
-      border:1.5px solid rgba(255,255,255,0.4);
+      box-shadow:0 2px 8px rgba(0,0,0,0.45);
+      border:2px solid rgba(255,255,255,0.6);
       pointer-events:none;
       user-select:none;
+      transform:translate(-50%,-50%);
+      display:inline-block;
     ">${text}</div>`,
     className: '',
-    iconAnchor: undefined,
-    iconSize: undefined,
+    iconAnchor: [0, 0],
+    iconSize: [0, 0],
   })
 }
 
@@ -173,10 +174,10 @@ function CombinedLayer({ addresses, isochroneData, weights }: CombinedLayerProps
             data={feature}
             style={() => ({
               fillColor: color,
-              fillOpacity: 0.28,   // reduced from 0.55
+              fillOpacity: 0.13,
               color: color,
               weight: 1.5,
-              opacity: 0.7,
+              opacity: 0.6,
             })}
           />
         )
@@ -305,6 +306,11 @@ export default function MapView({
           <p className="text-gray-400 pt-1 border-t border-gray-100">Darker = closer (15 min)</p>
         </div>
       )}
+
+      {/* Version badge */}
+      <div className="absolute bottom-2 right-2 z-[1000] text-[10px] text-gray-400 bg-white/70 rounded px-1.5 py-0.5 pointer-events-none select-none">
+        v1.0
+      </div>
 
       {/* Empty state */}
       {addresses.length === 0 && (

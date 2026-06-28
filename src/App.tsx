@@ -14,6 +14,8 @@ import { fetchValhallaIsochrone, fetchDigitransitIsochrone } from './utils/api'
 import Sidebar from './components/Sidebar'
 import MapView from './components/MapView'
 
+const DIGITRANSIT_KEY = 'eb6662774de44edb82ceaa643a50d79f'
+
 const DEFAULT_WEIGHTS: TransportWeights = {
   walking: 40,
   cycling: 70,
@@ -21,12 +23,6 @@ const DEFAULT_WEIGHTS: TransportWeights = {
   transit: 80,
 }
 
-// Read key synchronously so it's available on the very first render
-function getInitialKey(): string {
-  return localStorage.getItem('digitransit_key') || 'eb6662774de44edb82ceaa643a50d79f'
-}
-
-// Pre-seeded with the three addresses from the screenshot
 const SEED_ADDRESSES: Address[] = [
   {
     id: 'seed-0',
@@ -65,12 +61,6 @@ export default function App() {
   const [isochroneData, setIsochroneData] = useState<IsochroneDataMap>({})
   const [loadingMap, setLoadingMap] = useState<IsochroneLoadingMap>({})
   const [errorMap, setErrorMap] = useState<IsochroneErrorMap>({})
-  const [digitransitKey, setDigitransitKey] = useState<string>(getInitialKey)
-
-  const saveDigitransitKey = useCallback((key: string) => {
-    setDigitransitKey(key)
-    localStorage.setItem('digitransit_key', key)
-  }, [])
 
   const fetchIsochronesForAddress = useCallback(
     async (address: Address) => {
@@ -89,16 +79,11 @@ export default function App() {
         modes.map(async (mode) => {
           try {
             if (mode === 'transit') {
-              if (!digitransitKey) {
-                errors[mode] = 'No Digitransit API key — add one in Settings'
-                results[mode] = null
-              } else {
-                results[mode] = await fetchDigitransitIsochrone(
-                  address.lat,
-                  address.lng,
-                  digitransitKey,
-                )
-              }
+              results[mode] = await fetchDigitransitIsochrone(
+                address.lat,
+                address.lng,
+                DIGITRANSIT_KEY,
+              )
             } else {
               results[mode] = await fetchValhallaIsochrone(address.lat, address.lng, mode)
             }
@@ -126,7 +111,7 @@ export default function App() {
         }))
       }
     },
-    [digitransitKey],
+    [],
   )
 
   // Fetch isochrones for seed addresses exactly once on mount
@@ -180,7 +165,6 @@ export default function App() {
         viewMode={viewMode}
         loadingMap={loadingMap}
         errorMap={errorMap}
-        digitransitKey={digitransitKey}
         isAnyLoading={isAnyLoading}
         onAddAddress={addAddress}
         onRemoveAddress={removeAddress}
@@ -188,7 +172,6 @@ export default function App() {
         onRetryAddress={retryAddress}
         onSetWeight={setWeight}
         onSetViewMode={setViewMode}
-        onSaveDigitransitKey={saveDigitransitKey}
       />
       <div className="flex-1 relative">
         <MapView

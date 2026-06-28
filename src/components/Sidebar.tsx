@@ -17,7 +17,6 @@ interface Props {
   viewMode: ViewMode
   loadingMap: IsochroneLoadingMap
   errorMap: IsochroneErrorMap
-  digitransitKey: string
   isAnyLoading: boolean
   onAddAddress: (inputText: string, displayName: string, lat: number, lng: number) => void
   onRemoveAddress: (id: string) => void
@@ -25,7 +24,6 @@ interface Props {
   onRetryAddress: (address: Address) => void
   onSetWeight: (mode: TransportMode, value: number) => void
   onSetViewMode: (mode: ViewMode) => void
-  onSaveDigitransitKey: (key: string) => void
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -97,7 +95,7 @@ function AddressSearch({
           className="flex-1 text-sm text-gray-800 outline-none bg-transparent placeholder-gray-400"
           onFocus={() => suggestions.length > 0 && setOpen(true)}
         />
-        {loading && <span className="text-gray-400 animate-spin text-xs">⟳</span>}
+        {loading && <span className="text-gray-400 text-xs animate-pulse">…</span>}
       </div>
 
       {open && suggestions.length > 0 && (
@@ -166,10 +164,7 @@ function AddressItem({
             onBlur={commitLabel}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitLabel()
-              if (e.key === 'Escape') {
-                setLabelInput(address.label)
-                setEditing(false)
-              }
+              if (e.key === 'Escape') { setLabelInput(address.label); setEditing(false) }
             }}
             className="w-full text-sm font-medium text-gray-800 border-b border-blue-500 outline-none bg-transparent"
           />
@@ -185,18 +180,13 @@ function AddressItem({
         <div className="text-xs text-gray-400 truncate mt-0.5">{address.inputText}</div>
         {isLoading && (
           <div className="text-xs text-blue-500 mt-1 flex items-center gap-1">
-            <span className="animate-pulse">●</span> Loading isochrones…
+            <span className="animate-pulse">●</span> Loading…
           </div>
         )}
         {!isLoading && hasErrors && (
           <div className="flex items-center gap-1 mt-1">
             <span className="text-xs text-orange-500">Some modes failed</span>
-            <button
-              onClick={onRetry}
-              className="text-xs text-blue-500 underline hover:no-underline"
-            >
-              retry
-            </button>
+            <button onClick={onRetry} className="text-xs text-blue-500 underline hover:no-underline">retry</button>
           </div>
         )}
       </div>
@@ -221,13 +211,10 @@ function TransportSlider({
   onChange: (v: number) => void
 }) {
   const color =
-    mode === 'walking'
-      ? '#22c55e'
-      : mode === 'cycling'
-        ? '#3b82f6'
-        : mode === 'car'
-          ? '#f59e0b'
-          : '#a855f7'
+    mode === 'walking' ? '#22c55e'
+    : mode === 'cycling' ? '#3b82f6'
+    : mode === 'car' ? '#f59e0b'
+    : '#a855f7'
 
   return (
     <div className="flex items-center gap-3">
@@ -245,10 +232,7 @@ function TransportSlider({
           className="flex-1"
           style={{ color, background: `linear-gradient(to right, ${color} ${value}%, #e5e7eb ${value}%)` }}
         />
-        <span
-          className="text-xs font-semibold w-8 text-right"
-          style={{ color: value > 0 ? color : '#9ca3af' }}
-        >
+        <span className="text-xs font-semibold w-8 text-right" style={{ color: value > 0 ? color : '#9ca3af' }}>
           {value}%
         </span>
       </div>
@@ -262,22 +246,17 @@ export default function Sidebar({
   viewMode,
   loadingMap,
   errorMap,
-  digitransitKey,
   onAddAddress,
   onRemoveAddress,
   onUpdateLabel,
   onRetryAddress,
   onSetWeight,
   onSetViewMode,
-  onSaveDigitransitKey,
 }: Props) {
-  const [showSettings, setShowSettings] = useState(false)
-  const [keyInput, setKeyInput] = useState(digitransitKey)
   const [collapsed, setCollapsed] = useState(false)
 
   return (
     <>
-      {/* Mobile toggle */}
       <button
         className="md:hidden fixed top-3 left-3 z-50 bg-white shadow-lg rounded-lg p-2 text-gray-600"
         onClick={() => setCollapsed((c) => !c)}
@@ -303,14 +282,14 @@ export default function Sidebar({
         </div>
 
         <div className="flex-1 overflow-y-auto sidebar-scroll px-4 py-4 space-y-5">
-          {/* Addresses section */}
+          {/* Addresses */}
           <section>
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
               📍 Locations
             </h2>
             <AddressSearch onAdd={onAddAddress} />
 
-            {addresses.length > 0 && (
+            {addresses.length > 0 ? (
               <div className="mt-3 space-y-2">
                 {addresses.map((a) => (
                   <AddressItem
@@ -324,16 +303,14 @@ export default function Sidebar({
                   />
                 ))}
               </div>
-            )}
-
-            {addresses.length === 0 && (
+            ) : (
               <div className="mt-3 text-xs text-gray-400 text-center py-4 border border-dashed border-gray-200 rounded-lg">
                 Add 1–8 locations to get started
               </div>
             )}
           </section>
 
-          {/* Transport section */}
+          {/* Transport */}
           <section>
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               ⚖️ Transport Priority
@@ -348,12 +325,10 @@ export default function Sidebar({
                 />
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-2">
-              0 = hide mode · higher = more visible & prioritized in combined view
-            </p>
+            <p className="text-xs text-gray-400 mt-2">0 = hide · higher = more weight</p>
           </section>
 
-          {/* View mode section */}
+          {/* View */}
           <section>
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
               👁 View
@@ -382,86 +357,8 @@ export default function Sidebar({
                 Combined
               </button>
             </div>
-            {viewMode === 'combined' && addresses.length >= 2 && (
-              <p className="text-xs text-gray-400 mt-2">
-                Green = close to all locations · Red = far from some
-              </p>
-            )}
-          </section>
-
-          {/* Legend */}
-          {addresses.length > 0 && (
-            <section>
-              <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                🕐 Travel Time Rings
-              </h2>
-              <div className="flex items-center gap-3 flex-wrap">
-                {[
-                  { label: '15 min', opacity: 'opacity-90' },
-                  { label: '30 min', opacity: 'opacity-60' },
-                  { label: '45 min', opacity: 'opacity-40' },
-                  { label: '60 min', opacity: 'opacity-20' },
-                ].map(({ label, opacity }) => (
-                  <div key={label} className="flex items-center gap-1">
-                    <div className={`w-3 h-3 rounded-sm bg-gray-600 ${opacity}`} />
-                    <span className="text-xs text-gray-500">{label}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Settings */}
-          <section>
-            <button
-              className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700 transition-colors"
-              onClick={() => setShowSettings((s) => !s)}
-            >
-              ⚙️ Settings
-              <span className="ml-auto">{showSettings ? '▲' : '▼'}</span>
-            </button>
-
-            {showSettings && (
-              <div className="mt-3 space-y-3">
-                <div>
-                  <label className="text-xs text-gray-600 font-medium block mb-1">
-                    Digitransit API Key{' '}
-                    <span className="text-gray-400 font-normal">(for public transit)</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={keyInput}
-                      onChange={(e) => setKeyInput(e.target.value)}
-                      placeholder="Enter subscription key…"
-                      className="flex-1 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    />
-                    <button
-                      onClick={() => onSaveDigitransitKey(keyInput)}
-                      className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Get a free key at{' '}
-                    <a
-                      href="https://portal.digitransit.fi"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-500 underline"
-                    >
-                      portal.digitransit.fi
-                    </a>
-                  </p>
-                </div>
-
-                <div className="text-xs text-gray-400 bg-gray-100 rounded-lg p-2.5 space-y-1">
-                  <p className="font-medium text-gray-500">About isochrone sources:</p>
-                  <p>🚶🚲🚗 Walk, cycling, car — Valhalla (openstreetmap.de), no key needed</p>
-                  <p>🚌 Transit — Digitransit HSL API, requires subscription key</p>
-                </div>
-              </div>
+            {viewMode === 'combined' && (
+              <p className="text-xs text-gray-400 mt-2">Green = close to all · Red = far</p>
             )}
           </section>
         </div>
