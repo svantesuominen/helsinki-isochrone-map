@@ -14,7 +14,11 @@ import { fetchValhallaIsochrone, fetchDigitransitIsochrone } from './utils/api'
 import Sidebar from './components/Sidebar'
 import MapView from './components/MapView'
 
-const DIGITRANSIT_KEY = 'eb6662774de44edb82ceaa643a50d79f'
+const ENV_KEY = (import.meta.env.VITE_DIGITRANSIT_KEY as string) || ''
+
+function getInitialKey(): string {
+  return localStorage.getItem('digitransit_key') || ENV_KEY
+}
 
 const DEFAULT_WEIGHTS: TransportWeights = {
   walking: 40,
@@ -61,6 +65,12 @@ export default function App() {
   const [isochroneData, setIsochroneData] = useState<IsochroneDataMap>({})
   const [loadingMap, setLoadingMap] = useState<IsochroneLoadingMap>({})
   const [errorMap, setErrorMap] = useState<IsochroneErrorMap>({})
+  const [digitransitKey, setDigitransitKey] = useState<string>(getInitialKey)
+
+  const saveDigitransitKey = useCallback((key: string) => {
+    setDigitransitKey(key)
+    localStorage.setItem('digitransit_key', key)
+  }, [])
 
   const fetchIsochronesForAddress = useCallback(
     async (address: Address) => {
@@ -79,11 +89,16 @@ export default function App() {
         modes.map(async (mode) => {
           try {
             if (mode === 'transit') {
-              results[mode] = await fetchDigitransitIsochrone(
-                address.lat,
-                address.lng,
-                DIGITRANSIT_KEY,
-              )
+              if (!digitransitKey) {
+                errors[mode] = 'No Digitransit API key — add one in Settings'
+                results[mode] = null
+              } else {
+                results[mode] = await fetchDigitransitIsochrone(
+                  address.lat,
+                  address.lng,
+                  digitransitKey,
+                )
+              }
             } else {
               results[mode] = await fetchValhallaIsochrone(address.lat, address.lng, mode)
             }
@@ -111,7 +126,7 @@ export default function App() {
         }))
       }
     },
-    [],
+    [digitransitKey],
   )
 
   // Fetch isochrones for seed addresses exactly once on mount
@@ -165,6 +180,7 @@ export default function App() {
         viewMode={viewMode}
         loadingMap={loadingMap}
         errorMap={errorMap}
+        digitransitKey={digitransitKey}
         isAnyLoading={isAnyLoading}
         onAddAddress={addAddress}
         onRemoveAddress={removeAddress}
@@ -172,6 +188,7 @@ export default function App() {
         onRetryAddress={retryAddress}
         onSetWeight={setWeight}
         onSetViewMode={setViewMode}
+        onSaveDigitransitKey={saveDigitransitKey}
       />
       <div className="flex-1 relative">
         <MapView

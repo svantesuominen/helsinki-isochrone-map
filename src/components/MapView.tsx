@@ -61,25 +61,6 @@ function timeLabelIcon(text: string, color: string): L.DivIcon {
   })
 }
 
-// Safely get the centroid of a ring (outer polygon minus inner polygon)
-function getRingCentroid(
-  outer: Feature<Polygon | MultiPolygon> | null | undefined,
-  inner: Feature<Polygon | MultiPolygon> | null | undefined,
-): [number, number] | null {
-  if (!outer) return null
-  try {
-    let target: Feature = outer
-    if (inner) {
-      const ring = turf.difference(outer, inner)
-      if (ring) target = ring
-    }
-    const c = turf.centroid(target)
-    const [lng, lat] = c.geometry.coordinates
-    return [lat, lng]
-  } catch {
-    return null
-  }
-}
 
 interface IndividualLayersProps {
   addresses: Address[]
@@ -141,22 +122,41 @@ function CombinedLayer({ addresses, isochroneData, weights }: CombinedLayerProps
     [addresses, isochroneData, weights],
   )
 
-  // Compute centroid labels for each time ring (annular band between thresholds)
+  // Paired border labels: one on each side of every zone boundary, like nation borders
   const labels = useMemo(() => {
-    const sortedTs: TimeThreshold[] = [60, 45, 30, 15]
-    return sortedTs
-      .map((T, idx) => {
-        const outer = combined[T] as Feature<Polygon | MultiPolygon> | null | undefined
-        const innerT = sortedTs[idx + 1] as TimeThreshold | undefined
-        const inner = innerT
-          ? (combined[innerT] as Feature<Polygon | MultiPolygon> | null | undefined)
-          : undefined
+    const result: Array<{ pos: [number, number]; T: TimeThreshold; color: string }> = []
+    const boundaries: Array<[TimeThreshold, TimeThreshold]> = [[15, 30], [30, 45], [45, 60]]
 
-        const pos = getRingCentroid(outer, inner)
-        if (!pos) return null
-        return { pos, T, color: COMBINED_COLORS[T] }
-      })
-      .filter((x): x is { pos: [number, number]; T: TimeThreshold; color: string } => x !== null)
+    for (const [T, nextT] of boundaries) {
+      const innerPoly = combined[T] as Feature<Polygon | MultiPolygon> | null | undefined
+      const outerPoly = combined[nextT] as Feature<Polygon | MultiPolygon> | null | undefined
+      if (!innerPoly || !outerPoly) continue
+
+      try {
+        const ring = turf.difference(outerPoly, innerPoly)
+        if (!ring) continue
+
+        const innerC = turf.centroid(innerPoly)
+        const ringC = turf.centroid(ring as Feature<Polygon | MultiPolygon>)
+        const [icLng, icLat] = innerC.geometry.coordinates
+        const [rcLng, rcLat] = ringC.geometry.coordinates
+
+        // Inner side of boundary (40% from inner centroid toward ring centroid)
+        result.push({
+          pos: [icLat + (rcLat - icLat) * 0.4, icLng + (rcLng - icLng) * 0.4],
+          T,
+          color: COMBINED_COLORS[T],
+        })
+        // Outer side of boundary (40% from ring centroid toward inner centroid)
+        result.push({
+          pos: [rcLat + (icLat - rcLat) * 0.4, rcLng + (icLng - rcLng) * 0.4],
+          T: nextT,
+          color: COMBINED_COLORS[nextT],
+        })
+      } catch { /* ignore topology errors */ }
+    }
+
+    return result
   }, [combined])
 
   // Render largest polygon first so smaller ones sit on top

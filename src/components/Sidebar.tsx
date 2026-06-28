@@ -17,6 +17,7 @@ interface Props {
   viewMode: ViewMode
   loadingMap: IsochroneLoadingMap
   errorMap: IsochroneErrorMap
+  digitransitKey: string
   isAnyLoading: boolean
   onAddAddress: (inputText: string, displayName: string, lat: number, lng: number) => void
   onRemoveAddress: (id: string) => void
@@ -24,6 +25,7 @@ interface Props {
   onRetryAddress: (address: Address) => void
   onSetWeight: (mode: TransportMode, value: number) => void
   onSetViewMode: (mode: ViewMode) => void
+  onSaveDigitransitKey: (key: string) => void
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -240,18 +242,59 @@ function TransportSlider({
   )
 }
 
+function ApiKeyInput({ value, onSave }: { value: string; onSave: (key: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { setDraft(value) }, [value])
+
+  const handleSave = () => {
+    onSave(draft.trim())
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs text-gray-500 block">Digitransit HSL API key</label>
+      <div className="flex gap-1.5">
+        <input
+          type="password"
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setSaved(false) }}
+          onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+          className="flex-1 text-xs bg-white border border-gray-200 rounded-md px-2 py-1.5 outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
+          placeholder="Paste API key…"
+        />
+        <button
+          onClick={handleSave}
+          className={`text-xs px-2.5 py-1.5 rounded-md flex-shrink-0 transition-colors ${
+            saved
+              ? 'bg-green-500 text-white'
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
+        >
+          {saved ? '✓' : 'Save'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Sidebar({
   addresses,
   weights,
   viewMode,
   loadingMap,
   errorMap,
+  digitransitKey,
   onAddAddress,
   onRemoveAddress,
   onUpdateLabel,
   onRetryAddress,
   onSetWeight,
   onSetViewMode,
+  onSaveDigitransitKey,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false)
 
@@ -360,6 +403,14 @@ export default function Sidebar({
             {viewMode === 'combined' && (
               <p className="text-xs text-gray-400 mt-2">Green = close to all · Red = far</p>
             )}
+          </section>
+
+          {/* Settings */}
+          <section>
+            <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              ⚙️ Settings
+            </h2>
+            <ApiKeyInput value={digitransitKey} onSave={onSaveDigitransitKey} />
           </section>
         </div>
       </aside>
