@@ -16,7 +16,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@turf/turf": ["./node_modules/@turf/turf/index.d.ts"]
+      "@turf/turf": ["./node_modules/@turf/turf/index.d.ts"],
+      "@turf/helpers": ["./node_modules/@turf/helpers/dist/js/index.d.ts"]
     }
   },
   "include": ["src"]

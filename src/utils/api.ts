@@ -1,7 +1,9 @@
-import type { FeatureCollection, Feature } from 'geojson'
+import * as turf from '@turf/turf'
+import type { FeatureCollection, Feature, Polygon, MultiPolygon, Point } from 'geojson'
 import type { GeocodeSuggestion } from '../types'
 
 const VALHALLA_BASE = 'https://valhalla1.openstreetmap.de'
+const DIGITRANSIT_V2 = 'https://api.digitransit.fi/routing/v2/hsl/gtfs/v1'
 
 const VALHALLA_COSTING: Record<string, string> = {
   walking: 'pedestrian',
@@ -14,7 +16,6 @@ export async function geocodeAddress(query: string): Promise<GeocodeSuggestion[]
   url.searchParams.set('q', query)
   url.searchParams.set('format', 'jsonv2')
   url.searchParams.set('countrycodes', 'fi')
-  // Helsinki area bounding box: minLon, maxLat, maxLon, minLat
   url.searchParams.set('viewbox', '24.3,60.6,25.5,59.8')
   url.searchParams.set('bounded', '1')
   url.searchParams.set('limit', '6')
@@ -65,72 +66,138 @@ export async function fetchValhallaIsochrone(
   const url = `${VALHALLA_BASE}/isochrone?json=${encodeURIComponent(JSON.stringify(params))}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Valhalla error: ${res.status} ${res.statusText}`)
-
-  const data: FeatureCollection = await res.json()
-
-  // Ensure contour property exists from Valhalla's response
-  // Valhalla returns features with properties.contour in minutes
-  return data
+  return res.json()
 }
 
+/**
+ * Transit isochrones via Digitransit v2 GraphQL.
+ *
+ * Strategy: build a regular point grid around the destination, batch all
+ * routing queries into one GraphQL request (one alias per grid point), then
+ * use turf.isobands() to turn the travel-time surface into isochrone polygons.
+ */
 export async function fetchDigitransitIsochrone(
-  lat: number,
-  lng: number,
+  destLat: number,
+  destLng: number,
   subscriptionKey: string,
   times = [15, 30, 45, 60],
 ): Promise<FeatureCollection> {
-  const now = new Date()
-  // Use next weekday at 8am for realistic transit times
-  const date = getNextWeekday(now)
-  const time = '08:00:00'
+  const date = getNextWeekday(new Date())
+  const queryTime = '08:00:00'
 
-  const params = new URLSearchParams({
-    fromPlace: `${lat},${lng}`,
-    mode: 'TRANSIT,WALK',
-    date,
-    time,
-    walkReluctance: '2',
-    walkBoardCost: '600',
-    minTransferTime: '180',
-    maxWalkDistance: '1500',
-    precisionMeters: '250',
-    offRoadDistanceMeters: '500',
+  // Grid covering ~44 × 56 km around the destination, one point every 7 km → ~63 pts
+  const bbox: [number, number, number, number] = [
+    destLng - 0.4,
+    destLat - 0.27,
+    destLng + 0.4,
+    destLat + 0.27,
+  ]
+  const grid = turf.pointGrid(bbox, 7, { units: 'kilometers' })
+
+  // Always include the destination itself (travel time = 0)
+  grid.features.push(turf.point([destLng, destLat], { travelTime: 0 }))
+
+  const gridPts = grid.features.map((f: { geometry: Point }) => {
+    const [lon, lat] = f.geometry.coordinates
+    return { lat, lon }
   })
 
-  times.forEach((t) => params.append('cutoffSec', String(t * 60)))
-
-  const res = await fetch(
-    `https://api.digitransit.fi/routing/v1/routers/hsl/isochrone?${params}`,
-    {
-      headers: { 'digitransit-subscription-key': subscriptionKey },
-    },
+  // One GraphQL alias per grid point; skip the last (destination) from the query
+  const aliases = gridPts.slice(0, -1).map(
+    (p: { lat: number; lon: number }, i: number) => `
+      p${i}: plan(
+        from: {lat: ${p.lat.toFixed(6)}, lon: ${p.lon.toFixed(6)}}
+        to:   {lat: ${destLat.toFixed(6)}, lon: ${destLng.toFixed(6)}}
+        numItineraries: 1
+        date: "${date}"
+        time: "${queryTime}"
+        transportModes: [{mode: TRANSIT}, {mode: WALK}]
+        walkReluctance: 2.0
+        maxWalkDistance: 1500
+      ) { itineraries { duration } }`,
   )
 
-  if (!res.ok) throw new Error(`Digitransit error: ${res.status} ${res.statusText}`)
+  const query = `{ ${aliases.join('\n')} }`
 
-  const data = await res.json()
-
-  // OTP v1 returns features with properties.time in seconds — normalise to minutes
-  const features = (data as FeatureCollection).features.map((f: Feature) => ({
-    ...f,
-    properties: {
-      ...f.properties,
-      contour: Math.round(((f.properties?.time as number) || 0) / 60),
+  const res = await fetch(DIGITRANSIT_V2, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'digitransit-subscription-key': subscriptionKey,
     },
-  }))
+    body: JSON.stringify({ query }),
+  })
 
-  // Sort descending (60-min first) to match Valhalla's order
-  features.sort(
-    (a: Feature, b: Feature) =>
-      ((b.properties?.contour as number) || 0) - ((a.properties?.contour as number) || 0),
+  if (!res.ok) throw new Error(`Digitransit v2 error: ${res.status} ${res.statusText}`)
+
+  const result = await res.json()
+  if (result.errors?.length) {
+    throw new Error(`Digitransit v2 GraphQL: ${result.errors[0].message}`)
+  }
+
+  const data = (result.data ?? {}) as Record<
+    string,
+    { itineraries: Array<{ duration: number }> } | null
+  >
+
+  // Annotate grid points with travel time in minutes
+  const maxTime = times[times.length - 1]
+  const annotated = grid.features.map((f: Feature, i: number) => {
+    // Last feature is the destination (travelTime already set to 0)
+    if (i === grid.features.length - 1) return f
+    const plan = data[`p${i}`]
+    const durationMin = (plan?.itineraries?.[0]?.duration ?? (maxTime + 30) * 60) / 60
+    return { ...f, properties: { travelTime: Math.min(durationMin, maxTime + 30) } }
+  })
+
+  const annotatedGrid = turf.featureCollection(annotated)
+
+  // turf.isobands with breaks [0, 15, 30, 45, 60] creates 4 band features:
+  // properties[zProperty] = "0-15", "15-30", "30-45", "45-60"
+  const breaks = [0, ...times]
+  const bands = turf.isobands(annotatedGrid, breaks, { zProperty: 'travelTime' })
+
+  // Build nested "within T min" polygons by unioning the bands up to T
+  const resultFeatures: Feature[] = []
+  for (const T of [...times].sort((a, b) => b - a)) {
+    const relevant = bands.features.filter((f: Feature) => {
+      const band = f.properties?.travelTime as string | undefined
+      if (!band) return false
+      const upper = parseFloat(band.split('-')[1])
+      return !isNaN(upper) && upper <= T
+    })
+
+    if (relevant.length === 0) continue
+
+    let merged: Feature<Polygon | MultiPolygon> | null =
+      relevant[0] as Feature<Polygon | MultiPolygon>
+    for (let i = 1; i < relevant.length; i++) {
+      if (!merged) break
+      try {
+        merged = turf.union(
+          merged,
+          relevant[i] as Feature<Polygon | MultiPolygon>,
+        ) as Feature<Polygon | MultiPolygon> | null
+      } catch {
+        // ignore topology errors on individual union steps
+      }
+    }
+
+    if (merged) {
+      resultFeatures.push({ ...merged, properties: { contour: T } })
+    }
+  }
+
+  // Sort descending (60-min first) so small rings render on top
+  resultFeatures.sort(
+    (a, b) => ((b.properties?.contour as number) || 0) - ((a.properties?.contour as number) || 0),
   )
 
-  return { ...data, features }
+  return turf.featureCollection(resultFeatures)
 }
 
 function getNextWeekday(from: Date): string {
   const d = new Date(from)
-  // If weekend, advance to Monday
   if (d.getDay() === 0) d.setDate(d.getDate() + 1)
   if (d.getDay() === 6) d.setDate(d.getDate() + 2)
   return d.toISOString().split('T')[0]
